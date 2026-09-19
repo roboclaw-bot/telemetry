@@ -14,6 +14,16 @@ written from a validated request.
 | `GET \| POST /api/latest-version` | Returns `{ version, note? }`. `version` is the latest published OpenClaw release (looked up from the npm registry and cached at the edge for 5 minutes). `note` is an optional short message shown in the operator's terminal, used only when a release is worth acting on immediately. |
 | `GET /` | Human-readable page: what is collected, how to turn it off, without a public statistics dashboard. |
 
+## Identifier-free update outcomes
+
+The same POST endpoint also accepts a strict schema-2 `update_result` event from
+a companion client implementation. These outcome reports use a **separate dataset**
+and never include geography or daily feature/identity rows. All fields are required
+public labels; unknown keys, invalid labels, malformed UTF-8 and bodies over 4096
+bytes are rejected. This receiver change does not enable a client or deploy collection.
+See [the wire contract, storage columns, retention and private aggregate SQL](docs/update-results.md).
+The daily-check behavior described below is unchanged.
+
 ## What an install sends
 
 With automatic update checks enabled, OpenClaw reuses a successful version check for 24 hours.
@@ -72,7 +82,7 @@ each field; missing or invalid values are left empty without discarding valid fi
 
 ## What is stored
 
-Each recorded request contributes one Analytics Engine data point with these columns and no others:
+Each recorded daily update check contributes one Analytics Engine data point with these columns and no others (schema-2 outcome storage is documented separately above):
 
 | Column | Value |
 | --- | --- |
@@ -99,7 +109,7 @@ enablement. The session count depends on creation events still retained in a bou
 Missing or unreadable state produces zero; this is not active sessions, messages, or all sessions
 that existed that day.
 
-Unknown keys in a request body are dropped rather than stored, so a future client cannot silently
+Unknown keys in a schema-1 request body are dropped rather than stored, so a future client cannot silently
 widen what this service keeps. User-Agents longer than 512 characters become an unknown identity
 before parsing. Identity fields remain length-bounded and character-filtered. Feature IDs must be
 complete identifiers of at most 64 characters; malformed or overlength IDs are dropped, never

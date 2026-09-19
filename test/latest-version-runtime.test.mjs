@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+const outcomeFixture = JSON.parse(readFileSync(new URL("./fixtures/update-result.json", import.meta.url), "utf8"));
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { experimental_readRawConfig } from "wrangler";
 
@@ -31,18 +33,23 @@ describe("update checks over workerd HTTP", () => {
 					export default {
 						async fetch(request, env) {
 							let point;
+							let outcomePoint;
 							// Inject Unicode here: Miniflare's cf override header corrupts it in transit.
 							const incoming = new Request(request, {
 								cf: { ...request.cf, city: " Sa\\u0303o Paulo " },
 							});
 							const response = await worker.fetch(incoming, {
 								...env,
+								UPDATE_RESULTS: { writeDataPoint(value) {
+									env.UPDATE_RESULTS.writeDataPoint(value);
+									outcomePoint = value;
+								} },
 								TELEMETRY: { writeDataPoint(value) {
 									env.TELEMETRY.writeDataPoint(value);
 									point = value;
 								} },
 							});
-							return Response.json({ status: response.status, body: await response.json(), point });
+							return Response.json({ status: response.status, body: await response.json(), point, outcomePoint });
 						},
 					};
 				`,
@@ -68,7 +75,7 @@ describe("update checks over workerd HTTP", () => {
 			port: 0,
 			cf: false,
 			ratelimits: Object.fromEntries(rawConfig.ratelimits.map(({ name, ...limit }) => [name, limit])),
-			analyticsEngineDatasets: { TELEMETRY: { dataset: "test_telemetry" } },
+			analyticsEngineDatasets: { TELEMETRY: { dataset: "test_telemetry" }, UPDATE_RESULTS: { dataset: "test_update_results" } },
 			outboundService: async (request) => {
 				const url = new URL(request.url);
 				if (url.href === "https://registry.npmjs.org/openclaw/latest") {
@@ -103,6 +110,37 @@ describe("update checks over workerd HTTP", () => {
 					doubles: [0, 0, 0],
 				},
 			});
+		}
+	}, 30_000);
+
+	it("isolates schema-2 outcomes and rejects invalid uploads over local HTTP", async () => {
+		await start(recordingScript);
+		const origin = await runtime.ready;
+		const raw = JSON.stringify(outcomeFixture);
+		for (const [body, status] of [
+			[raw, 200],
+			[JSON.stringify({ ...outcomeFixture, installId: "synthetic-private-id" }), 400],
+			[JSON.stringify({ ...outcomeFixture, targetVersion: "private-build-sha" }), 400],
+			[raw.padEnd(4097), 400],
+			[Buffer.from([0xff]), 400],
+		]) {
+			const response = await fetch(new URL("/api/latest-version", origin), {
+				method: "POST", body,
+				headers: { "content-type": "application/json", "user-agent": "openclaw-update-result/1" },
+			});
+			const result = await response.json();
+			expect(result.status).toBe(status);
+			expect(result.point).toBeUndefined();
+			if (status === 200) {
+				expect(result.outcomePoint).toEqual({
+					indexes: ["2026.9.19"],
+					blobs: ["update_result", "succeeded", "2026.9.4", "2026.9.19", "2026.9.19", "2026.9.19", "linux", "x64", "npm-global", "stable", "under-1m", "passed", "none", "none", "none", "not-needed", "unknown"],
+					doubles: [2],
+				});
+			} else {
+				expect(result.outcomePoint).toBeUndefined();
+				expect(result.body).toEqual({ error: "invalid_update_result" });
+			}
 		}
 	}, 30_000);
 

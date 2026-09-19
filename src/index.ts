@@ -1,9 +1,11 @@
 import { keepKnownNames, loadKnownNames, normalizeVersion } from "./allowlist.js";
 import { buildDataPoint } from "./analytics.js";
 import type { Env } from "./env.js";
-import { readFeatureStats } from "./feature-stats.js";
+import { readCappedBody } from "./feature-stats.js";
 import { parseRequestGeography } from "./geography.js";
-import { parseClientIdentity } from "./payload.js";
+import { parseClientIdentity, parseFeatureStats } from "./payload.js";
+import type { FeatureStats } from "./payload.js";
+import { buildUpdateResultPoint, isUpdateResultCandidate, MAX_UPDATE_RESULT_BYTES, parseUpdateResult, UPDATE_RESULT_USER_AGENT } from "./update-result.js";
 import { renderHomePage } from "./page.js";
 
 const UPSTREAM_VERSION_URL = "https://registry.npmjs.org/openclaw/latest";
@@ -90,12 +92,11 @@ async function mayRecord(request: Request, env: Env): Promise<boolean> {
 	return outcome?.success !== false;
 }
 
-async function recordRequest(request: Request, env: Env): Promise<void> {
+async function recordRequest(request: Request, env: Env, features: FeatureStats | undefined): Promise<void> {
 	// Over-limit callers still get their answer below; they just stop counting.
 	if (!(await mayRecord(request, env))) return;
 
 	const identity = parseClientIdentity(request.headers.get("user-agent"));
-	const features = await readFeatureStats(request);
 	const known = features ? await loadKnownNames() : undefined;
 	const validated = features
 		? {
@@ -120,8 +121,32 @@ async function recordRequest(request: Request, env: Env): Promise<void> {
 }
 
 async function handleLatestVersion(request: Request, env: Env): Promise<Response> {
-	await recordRequest(request, env);
+	let parsed: unknown;
+	if (request.method === "POST") {
+		// The fixed UA keeps even malformed/oversized outcome uploads off the
+		// legacy identity/geography path. JSON discriminators also work without it.
+		const outcomeAgent = request.headers.get("user-agent") === UPDATE_RESULT_USER_AGENT;
+		const body = await readCappedBody(request, outcomeAgent ? MAX_UPDATE_RESULT_BYTES : undefined);
+		const raw = body?.text;
+		try { parsed = raw ? JSON.parse(raw) : undefined; } catch { /* Never log request bodies. */ }
+		if (outcomeAgent || isUpdateResultCandidate(parsed)) {
+			const result = body && body.byteLength <= MAX_UPDATE_RESULT_BYTES
+				? parseUpdateResult(parsed) : undefined;
+			if (!result) return jsonResponse({ error: "invalid_update_result" }, 400);
+			if (!env.UPDATE_RESULTS) return jsonResponse({ error: "update_results_unavailable" }, 503);
+			if (await mayRecord(request, env)) {
+				try { env.UPDATE_RESULTS.writeDataPoint(buildUpdateResultPoint(result)); }
+				catch { return jsonResponse({ error: "update_results_unavailable" }, 503); }
+			}
+			// Keep the existing limiter response: a version answer even when not recorded.
+			return latestVersionResponse();
+		}
+	}
+	await recordRequest(request, env, parseFeatureStats(parsed));
+	return latestVersionResponse();
+}
 
+async function latestVersionResponse(): Promise<Response> {
 	const latest = await fetchLatestVersion();
 	if (!latest) return jsonResponse({ error: "version_unavailable" }, 503);
 	return jsonResponse(RELEASE_NOTE ? { ...latest, note: RELEASE_NOTE } : latest, 200, VERSION_CACHE_SECONDS);

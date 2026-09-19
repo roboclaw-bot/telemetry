@@ -23,6 +23,10 @@
     {
       "binding": "TELEMETRY",
       "dataset": "openclaw_telemetry"
+    },
+    {
+      "binding": "UPDATE_RESULTS",
+      "dataset": "openclaw_update_results"
     }
   ],
   "routes": [
