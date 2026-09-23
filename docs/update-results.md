@@ -3,8 +3,18 @@
 This receiver accepts a terminal update outcome on the existing
 `POST /api/latest-version` endpoint. It is separate from daily update checks and
 schema-1 feature reports. This change does not enable a client, deploy the Worker,
-provision a production dataset, or authorize collection. Client consent and
-transport policy remain the responsibility of the companion client change.
+provision a production dataset, or authorize production collection. The companion
+client reports outcomes **on by default**, like the existing update ping, governed
+by update-request policy rather than optional schema-1 feature statistics.
+`update.checkOnStart: false`, `OPENCLAW_NO_AUTO_UPDATE=1`, and Nix mode suppress
+outcome reports. A truthy `CI` suppresses them unless a replacement
+`OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured. `DO_NOT_TRACK=1`,
+`openclaw telemetry off`, and `telemetry.enabled` control feature statistics, not
+default-on update outcomes; feature statistics remain off by default.
+
+The receiver and separate outcome dataset must be deployed and verified **before
+releasing the default-on client**. That rollout needs separate authorization;
+local tests do not establish production readiness.
 
 ## Wire contract
 
@@ -30,8 +40,11 @@ rejected, not ignored. The only numeric field is `schema: 2`; `event` is exactly
 | recovery | safe, unsafe, unknown |
 
 Public version syntax is
-`/^202[0-9]\.(?:[1-9]|1[0-2])\.(?:[1-9]|[12][0-9]|3[01])(?:-[1-9][0-9]{0,2})?(?:-beta\.[1-9][0-9]{0,2})?$/`,
+`/^202[0-9]\.(?:[1-9]|1[0-2])\.(?:0|[1-9][0-9]{0,5})(?:-[1-9][0-9]{0,2})?(?:-beta\.[1-9][0-9]{0,2})?$/`,
 matching the entire string (including rejecting trailing line terminators).
+The patch component accepts zero or a non-zero-leading integer up to six digits
+(0–999999), including extended-stable versions such as `2026.8.33` and
+`2026.8.123`. Year, month, revision and beta-suffix restrictions are unchanged.
 It excludes build metadata, commit SHAs and private prerelease labels. This is
 syntax validation, not a claim that a label was actually published. `succeeded`
 requires `failedStage`, `errorCategory` and `errorCode` all to be `none`.
@@ -123,8 +136,9 @@ ORDER BY reports DESC
 ```
 
 These are report counts, not unique installs, people or attempts. There are no
-identifiers for deduplication or longitudinal joins. Missing reports, opt-in
-selection, NAT rate limits, unauthenticated spoofing and sampling bias the counts.
+identifiers for deduplication or longitudinal joins. Missing reports, update-policy
+opt-outs, Nix/CI suppression, NAT rate limits, unauthenticated spoofing and sampling
+bias the counts.
 Do not treat them as fleet-wide success rates, billing or security evidence.
 Avoid individual-row exports or joins to daily geography; review any aggregate
 publication separately for small groups. These SQL examples were not run against

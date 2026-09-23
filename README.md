@@ -22,7 +22,15 @@ and never include geography or daily feature/identity rows. All fields are requi
 public labels; unknown keys, invalid labels, malformed UTF-8 and bodies over 4096
 bytes are rejected. This receiver change does not enable a client or deploy collection.
 See [the wire contract, storage columns, retention and private aggregate SQL](docs/update-results.md).
-The daily-check behavior described below is unchanged.
+The companion client reports outcomes **on by default**, like the existing update
+ping, under update-request policy rather than optional feature-statistics consent.
+`update.checkOnStart: false`, `OPENCLAW_NO_AUTO_UPDATE=1`, and Nix mode suppress
+outcomes; a truthy `CI` suppresses them unless a replacement
+`OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured. `DO_NOT_TRACK` and
+`openclaw telemetry off` control feature statistics, not update outcomes. Feature
+statistics remain off by default. Deploy and verify this receiver and its separate
+dataset **before releasing the default-on client**, under separately authorized
+rollout. The daily-check behavior described below is unchanged.
 
 ## What an install sends
 
@@ -179,9 +187,9 @@ processing is outside those settings.
 
 | Command or setting | Effect |
 | --- | --- |
-| `openclaw telemetry off` | Stops anonymous feature statistics. Update checks continue. |
+| `openclaw telemetry off` | Stops anonymous feature statistics. Update checks and default-on outcomes continue. |
 | `DO_NOT_TRACK=1` | Same, enforced from the environment. |
-| `update.checkOnStart: false` | Stops both tiers of automatic update requests. Explicit update commands and other configured services are separate. |
+| `update.checkOnStart: false` | Stops automatic update requests and outcome reporting. Explicit update commands and other configured services are separate. |
 
 `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests. A truthy `CI` suppresses both
 tiers unless a replacement `OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured.

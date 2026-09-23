@@ -31,6 +31,10 @@ it.each(["/", "/index.html"])("serves privacy information without a dashboard at
 	const html = await response.text();
 	expect(html).toContain("How to turn it off");
 	expect(html).toContain("Approximate location");
+	expect(html).toContain("outcomes <strong>on by default</strong>");
+	expect(html).toContain("<code>DO_NOT_TRACK</code> controls feature statistics, not update outcomes");
+	expect(html).toContain("Nix mode suppress outcomes");
+	expect(html).toContain("before releasing the default-on client");
 	expect(html).not.toContain("/api/stats");
 	expect(html).not.toContain("Loading aggregates");
 	expect(html).not.toContain("<script>");

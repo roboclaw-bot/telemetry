@@ -32,7 +32,19 @@ describe("strict update-result contract", () => {
 		for (const version of ["2026.9.19", "2026.9.19-1", "2026.9.19-beta.1", "2026.9.19-999-beta.999", "unknown"]) {
 			expect(parseUpdateResult({ ...fixture, [key]: version })).toBeDefined();
 		}
-		for (const version of ["2026x9x19", "2026.9.19\n", "2026.9.19+abc123", "2026.9.19-private.1", "abcdef1234", "2026.09.19", "2026.13.1", "2026.1.32", "2026.9.19-0", "2026.9.19-1000", "2026.9.19-beta.0", "2026.9.19-beta.1000", "2030.1.1"]) {
+		for (const version of ["2026x9x19", "2026.9.19\n", "2026.9.19+abc123", "2026.9.19-private.1", "abcdef1234", "2026.09.19", "2026.13.1", "2026.9.19-0", "2026.9.19-1000", "2026.9.19-beta.0", "2026.9.19-beta.1000", "2030.1.1"]) {
+			expect(parseUpdateResult({ ...fixture, [key]: version })).toBeUndefined();
+		}
+	});
+	it.each(versions)("accepts client patch boundaries in %s without changing the wire shape", (key) => {
+		for (const version of ["2026.8.0", "2026.8.32", "2026.8.33", "2026.8.123", "2026.8.999999", "2026.8.123-999-beta.999"]) {
+			const payload = { ...fixture, [key]: version };
+			expect(Object.keys(payload)).toHaveLength(18);
+			expect(parseUpdateResult(payload)).toEqual(payload);
+		}
+	});
+	it.each(versions)("rejects non-client patch syntax in %s", (key) => {
+		for (const version of ["2026.8.1000000", "2026.8.00", "2026.8.033", "2026.8.000123", "2026.8.123-private.1", "2026.8.123+abc123", "2026.8.123\n"]) {
 			expect(parseUpdateResult({ ...fixture, [key]: version })).toBeUndefined();
 		}
 	});

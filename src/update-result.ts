@@ -2,7 +2,7 @@ import type { DataPoint } from "./analytics.js";
 
 export const MAX_UPDATE_RESULT_BYTES = 4_096;
 export const UPDATE_RESULT_USER_AGENT = "openclaw-update-result/1";
-const PUBLIC_VERSION = /^202[0-9]\.(?:[1-9]|1[0-2])\.(?:[1-9]|[12][0-9]|3[01])(?:-[1-9][0-9]{0,2})?(?:-beta\.[1-9][0-9]{0,2})?$/;
+const PUBLIC_VERSION = /^202[0-9]\.(?:[1-9]|1[0-2])\.(?:0|[1-9][0-9]{0,5})(?:-[1-9][0-9]{0,2})?(?:-beta\.[1-9][0-9]{0,2})?$/;
 
 // Every value is a bounded public label, never an arbitrary diagnostic string.
 const LABELS = {
