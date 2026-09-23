@@ -12,6 +12,7 @@ written from a validated request.
 | Route | Purpose |
 | --- | --- |
 | `GET \| POST /api/latest-version` | Returns `{ version, note? }`. `version` is the latest published OpenClaw release (looked up from the npm registry and cached at the edge for 5 minutes). `note` is an optional short message shown in the operator's terminal, used only when a release is worth acting on immediately. |
+| `HEAD /api/latest-version` | Outcome capability only: empty 204 with `OpenClaw-Update-Results: 2` when its separate binding is present; otherwise empty 503 without that header. Always `Cache-Control: no-store`; no analytics, quota consumption or version lookup. |
 | `GET /` | Human-readable page: what is collected, how to turn it off, without a public statistics dashboard. |
 
 ## Identifier-free update outcomes
@@ -30,7 +31,14 @@ outcomes; a truthy `CI` suppresses them unless a replacement
 `openclaw telemetry off` control feature statistics, not update outcomes. Feature
 statistics remain off by default. Deploy and verify this receiver and its separate
 dataset **before releasing the default-on client**, under separately authorized
-rollout. The daily-check behavior described below is unchanged.
+rollout. The default production configuration intentionally omits `UPDATE_RESULTS`,
+so the existing main-push deployment cannot implicitly activate outcome collection.
+Outcome attempts HEAD the same full configured endpoint and POST only after exact
+204 plus `OpenClaw-Update-Results: 2`; old receivers (405) and unconfigured receivers
+(503) never receive the outcome payload. Binding presence is capability, not proof
+of production delivery. The daily GET and opt-in schema-1 POST remain single requests.
+See the contract for the shared timeout, no-redirect and opt-out recheck requirements.
+The daily-check behavior described below is unchanged.
 
 ## What an install sends
 
@@ -257,14 +265,14 @@ and needs review rather than silently falling back to a partial vocabulary.
 The initial snapshot includes all catalog revisions on the public main history since commit
 `844e781ca40952c98ee997b016e3cc5d2f12f9f3`, before name allowlisting began in August 2026.
 Refreshes append snapshots; never remove older ones during routine updates. This retains removed or
-renamed public entries for the entire seven-day stats window, including names admitted by the older
+renamed public entries, including names admitted by the older
 moving-catalog implementation. New public names remain rejected until reviewed metadata is deployed.
 The vocabulary is compiled into the Worker. Loading it requires neither upstream requests nor
 Cache API access, so old allowlist cache entries cannot be reused and cache outages cannot interrupt
-name validation. Each caller receives a fresh set.
+name validation. Ingestion checks the compiled vocabulary without exposing its mutable set.
 
 Historical rows may contain mixed-case names or case-distinct duplicates from older validation.
-This repair canonicalizes new rows only; stats consumers must validate historical coverage and handle
+New rows are canonicalized; offline consumers must validate historical coverage and handle
 those rows explicitly rather than assume the stored window is already canonical.
 
 ## Offline historical export

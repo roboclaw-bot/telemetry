@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { Agent, request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
 const outcomeFixture = JSON.parse(readFileSync(new URL("./fixtures/update-result.json", import.meta.url), "utf8"));
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +15,8 @@ const { rawConfig } = experimental_readRawConfig({ config: "wrangler.jsonc" });
 describe("update checks over workerd HTTP", () => {
 	let script;
 	let recordingScript;
+	let guardScript;
+	let outboundCalls;
 	let runtime;
 
 	beforeAll(async () => {
@@ -60,13 +63,38 @@ describe("update checks over workerd HTTP", () => {
 			write: false,
 		});
 		recordingScript = recordingBundle.outputFiles[0].text;
+		const guardBundle = await build({
+			stdin: {
+				resolveDir: process.cwd(),
+				contents: `
+					import worker from "./src/index.ts";
+					export default {
+						async fetch(request, env) {
+							const counts = { daily: 0, outcomes: 0, quota: 0, geography: 0 };
+							Object.defineProperty(request, "cf", { get() { counts.geography++; throw new Error("unexpected geography"); } });
+							const response = await worker.fetch(request, {
+								TELEMETRY: { writeDataPoint() { counts.daily++; } },
+								...(env.UPDATE_RESULTS ? { UPDATE_RESULTS: { writeDataPoint() { counts.outcomes++; } } } : {}),
+								RATE_LIMIT: { async limit() { counts.quota++; return { success: false }; } },
+							});
+							const headers = new Headers(response.headers);
+							headers.set("X-Test-Counts", JSON.stringify(counts));
+							return new Response(response.body, { status: response.status, headers });
+						}
+					};
+				`,
+			},
+			bundle: true, format: "esm", platform: "browser", write: false,
+		});
+		guardScript = guardBundle.outputFiles[0].text;
 	});
 
 	afterEach(async () => {
 		await runtime?.dispose();
 	});
 
-	async function start(workerScript = script) {
+	async function start(workerScript = script, outcomes = true) {
+		outboundCalls = 0;
 		runtime = new Miniflare(convertV4MiniflareOptions({
 			modules: true,
 			script: workerScript,
@@ -75,8 +103,9 @@ describe("update checks over workerd HTTP", () => {
 			port: 0,
 			cf: false,
 			ratelimits: Object.fromEntries(rawConfig.ratelimits.map(({ name, ...limit }) => [name, limit])),
-			analyticsEngineDatasets: { TELEMETRY: { dataset: "test_telemetry" }, UPDATE_RESULTS: { dataset: "test_update_results" } },
+			analyticsEngineDatasets: { TELEMETRY: { dataset: "test_telemetry" }, ...(outcomes ? { UPDATE_RESULTS: { dataset: "test_update_results" } } : {}) },
 			outboundService: async (request) => {
+				outboundCalls++;
 				const url = new URL(request.url);
 				if (url.href === "https://registry.npmjs.org/openclaw/latest") {
 					return Response.json({ version: "2026.8.2" });
@@ -86,6 +115,58 @@ describe("update checks over workerd HTTP", () => {
 		}));
 		await runtime.ready;
 	}
+
+	it.each([false, true])("HEAD capability over real HTTP, binding present: %s", async (present) => {
+		await start(guardScript, present);
+		const response = await fetch(new URL("/api/latest-version?configured=1", await runtime.ready), {
+			method: "HEAD", headers: { "user-agent": "openclaw-update-result/1" }, redirect: "error",
+		});
+		expect(response.status).toBe(present ? 204 : 503);
+		expect(response.headers.get("OpenClaw-Update-Results")).toBe(present ? "2" : null);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(await response.text()).toBe("");
+		expect(JSON.parse(response.headers.get("X-Test-Counts"))).toEqual({ daily: 0, outcomes: 0, quota: 0, geography: 0 });
+		expect(outboundCalls).toBe(0);
+	}, 30_000);
+
+	it("default production bindings fail closed on HEAD and outcome POST over HTTP", async () => {
+		await start(script, false);
+		const url = new URL("/api/latest-version", await runtime.ready);
+		const head = await fetch(url, { method: "HEAD" });
+		expect(head.status).toBe(503);
+		expect(head.headers.get("openclaw-update-results")).toBeNull();
+		const response = await fetch(url, { method: "POST", body: JSON.stringify(outcomeFixture), headers: { "user-agent": "openclaw-update-result/1" } });
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toEqual({ error: "update_results_unavailable" });
+		expect(outboundCalls).toBe(0);
+	}, 30_000);
+
+	it.each(["openclaw-update-result/1", "legacy-feature-agent"])("answers an unfinished quota-exhausted upload over real HTTP: %s", async (agent) => {
+		await start(guardScript);
+		const url = new URL("/api/latest-version", await runtime.ready);
+		// Loopback proof must not use the host's environment-proxy global agent.
+		const localAgent = new Agent();
+		const response = await new Promise((resolve, reject) => {
+			const request = httpRequest(url, { agent: localAgent, method: "POST", headers: { "user-agent": agent, "content-type": "application/json", "transfer-encoding": "chunked" } });
+			const timer = setTimeout(() => { request.destroy(); reject(new Error("receiver waited for unfinished upload")); }, 1000);
+			request.on("error", (error) => { clearTimeout(timer); reject(error); });
+			request.on("response", (response) => {
+				let body = "";
+				response.setEncoding("utf8");
+				response.on("data", (chunk) => { body += chunk; });
+				response.on("end", () => {
+					clearTimeout(timer);
+					try { resolve({ status: response.statusCode, body: JSON.parse(body), counts: JSON.parse(response.headers["x-test-counts"]) }); }
+					catch (error) { reject(error); }
+					finally { request.destroy(); }
+				});
+			});
+			request.flushHeaders();
+			request.write("{"); // Deliberately never end the chunked request.
+		}).finally(() => localAgent.destroy());
+		expect(response).toEqual({ status: 200, body: { version: "2026.8.2" }, counts: { daily: 0, outcomes: 0, quota: 1, geography: 0 } });
+		expect(outboundCalls).toBe(1);
+	}, 30_000);
 
 	it("validates named timezones and Unicode geography inside the pinned workerd runtime", async () => {
 		await start(recordingScript);

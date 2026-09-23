@@ -1,4 +1,4 @@
-import { keepKnownNames, loadKnownNames, normalizeVersion } from "./allowlist.js";
+import { keepKnownNames, normalizeVersion } from "./allowlist.js";
 import { buildDataPoint } from "./analytics.js";
 import type { Env } from "./env.js";
 import { readCappedBody } from "./feature-stats.js";
@@ -92,18 +92,14 @@ async function mayRecord(request: Request, env: Env): Promise<boolean> {
 	return outcome?.success !== false;
 }
 
-async function recordRequest(request: Request, env: Env, features: FeatureStats | undefined): Promise<void> {
-	// Over-limit callers still get their answer below; they just stop counting.
-	if (!(await mayRecord(request, env))) return;
-
+function recordRequest(request: Request, env: Env, features: FeatureStats | undefined): void {
 	const identity = parseClientIdentity(request.headers.get("user-agent"));
-	const known = features ? await loadKnownNames() : undefined;
 	const validated = features
 		? {
 				...features,
-				channels: keepKnownNames(features.channels, known),
-				providerFamilies: keepKnownNames(features.providerFamilies, known),
-				plugins: keepKnownNames(features.plugins, known),
+				channels: keepKnownNames(features.channels),
+				providerFamilies: keepKnownNames(features.providerFamilies),
+				plugins: keepKnownNames(features.plugins),
 			}
 		: undefined;
 
@@ -121,6 +117,10 @@ async function recordRequest(request: Request, env: Env, features: FeatureStats 
 }
 
 async function handleLatestVersion(request: Request, env: Env): Promise<Response> {
+	// Check recording quota exactly once, before reading any upload. Exhausted
+	// callers must still get a version answer even if their body never finishes.
+	if (!(await mayRecord(request, env))) return latestVersionResponse();
+
 	let parsed: unknown;
 	if (request.method === "POST") {
 		// The fixed UA keeps even malformed/oversized outcome uploads off the
@@ -134,15 +134,12 @@ async function handleLatestVersion(request: Request, env: Env): Promise<Response
 				? parseUpdateResult(parsed) : undefined;
 			if (!result) return jsonResponse({ error: "invalid_update_result" }, 400);
 			if (!env.UPDATE_RESULTS) return jsonResponse({ error: "update_results_unavailable" }, 503);
-			if (await mayRecord(request, env)) {
-				try { env.UPDATE_RESULTS.writeDataPoint(buildUpdateResultPoint(result)); }
-				catch { return jsonResponse({ error: "update_results_unavailable" }, 503); }
-			}
-			// Keep the existing limiter response: a version answer even when not recorded.
+			try { env.UPDATE_RESULTS.writeDataPoint(buildUpdateResultPoint(result)); }
+			catch { return jsonResponse({ error: "update_results_unavailable" }, 503); }
 			return latestVersionResponse();
 		}
 	}
-	await recordRequest(request, env, parseFeatureStats(parsed));
+	recordRequest(request, env, parseFeatureStats(parsed));
 	return latestVersionResponse();
 }
 
@@ -157,6 +154,16 @@ export default {
 		const url = new URL(request.url);
 
 		if (url.pathname === "/api/latest-version") {
+			// Capability only: no body, geography, recording quota, analytics or npm.
+			// Presence is not a delivery/readiness probe; never write a sample point.
+			if (request.method === "HEAD") {
+				return new Response(null, {
+					status: env.UPDATE_RESULTS ? 204 : 503,
+					headers: env.UPDATE_RESULTS
+						? { "OpenClaw-Update-Results": "2", "Cache-Control": "no-store" }
+						: { "Cache-Control": "no-store" },
+				});
+			}
 			if (request.method !== "GET" && request.method !== "POST") {
 				return jsonResponse({ error: "method_not_allowed" }, 405);
 			}

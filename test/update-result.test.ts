@@ -137,6 +137,57 @@ describe("outcome receiver isolation", () => {
 		expect(outcomes).toHaveBeenCalledTimes(success === false ? 0 : 1);
 		expect(daily).not.toHaveBeenCalled();
 	});
+	it.each([false, true])("advertises capability only with a binding: %s", async (present) => {
+		if (!present) delete env.UPDATE_RESULTS;
+		const limit = vi.fn();
+		const req = new Request("https://telemetry.example/api/latest-version?configured=1", { method: "HEAD" });
+		for (const property of ["body", "cf"]) {
+			Object.defineProperty(req, property, { get() { throw new Error("HEAD must not read " + property); } });
+		}
+		const response = await worker.fetch(req, { ...env, RATE_LIMIT: { limit } });
+		expect(response.status).toBe(present ? 204 : 503);
+		expect(response.headers.get("openclaw-update-results")).toBe(present ? "2" : null);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(await response.text()).toBe("");
+		expect(limit).not.toHaveBeenCalled();
+		expect(outcomes).not.toHaveBeenCalled();
+		expect(daily).not.toHaveBeenCalled();
+		expect(upstream).not.toHaveBeenCalled();
+	});
+	it.each([UPDATE_RESULT_USER_AGENT, "openclaw/2026.9.19 (linux; node/v24.0.0; x64; cli)"])("answers quota-exhausted unfinished POST without reading the body: %s", async (ua) => {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; controller.enqueue(new TextEncoder().encode("{")); } });
+		const req = request();
+		req.headers.set("user-agent", ua);
+		Object.defineProperty(req, "body", { value: stream });
+		const limit = vi.fn().mockResolvedValue({ success: false });
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const response = await Promise.race([
+				worker.fetch(req, { ...env, RATE_LIMIT: { limit } }),
+				new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("awaited unfinished body")), 250); }),
+			]);
+			expect(response.status).toBe(200);
+			await expect(response.json()).resolves.toEqual({ version: "2026.9.19" });
+			expect(stream.locked).toBe(false);
+			expect(limit).toHaveBeenCalledExactlyOnceWith({ key: "192.0.2.1" });
+			expect(outcomes).not.toHaveBeenCalled();
+			expect(daily).not.toHaveBeenCalled();
+		} finally {
+			if (timeout !== undefined) clearTimeout(timeout);
+			controller.close();
+		}
+	});
+	it.each(["GET", "POST"])("consumes one quota decision for legacy %s", async (method) => {
+		const limit = vi.fn().mockResolvedValue({ success: true });
+		const req = new Request("https://telemetry.example/api/latest-version", {
+			method, ...(method === "POST" ? { body: JSON.stringify({ schema: 1, features: {} }) } : {}),
+		});
+		expect((await worker.fetch(req, { ...env, RATE_LIMIT: { limit } })).status).toBe(200);
+		expect(limit).toHaveBeenCalledOnce();
+		expect(daily).toHaveBeenCalledOnce();
+		expect(outcomes).not.toHaveBeenCalled();
+	});
 	it("does not add an individual report route", async () => {
 		for (const path of ["/api/update-results", "/api/update-result", "/api/stats"]) {
 			expect((await worker.fetch(new Request("https://telemetry.example" + path), env)).status).toBe(404);

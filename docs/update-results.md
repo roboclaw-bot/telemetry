@@ -14,7 +14,32 @@ default-on update outcomes; feature statistics remain off by default.
 
 The receiver and separate outcome dataset must be deployed and verified **before
 releasing the default-on client**. That rollout needs separate authorization;
-local tests do not establish production readiness.
+local tests do not establish production readiness. The default production
+template deliberately **omits `UPDATE_RESULTS`**: the existing push-to-main
+workflow may deploy receiver code, but must not implicitly activate collection.
+A separately authorized rollout must explicitly add the `UPDATE_RESULTS`
+binding for `openclaw_update_results`, preserving the existing `TELEMETRY`
+binding, and verify retention and delivery before enabling production collection.
+No deployment or provisioning is authorized by this PR.
+
+## Capability handshake
+
+An outcome attempt uses **two requests**, first `HEAD`, then (only when supported)
+`POST`, to the same full configured `/api/latest-version` URL, including its
+query. There is no new endpoint setting or fallback. Both requests use the fixed
+`openclaw-update-result/1` User-Agent. Only exact status **204** with header
+`OpenClaw-Update-Results: 2` permits the client to POST. Header names are
+case-insensitive. Older receivers return 405; a receiver without the outcome
+binding returns **503 without the capability header**. Neither gets outcome data.
+
+HEAD has an empty body and `Cache-Control: no-store` for both 204 and 503. It
+checks binding presence synchronously; it never reads an upload or geography,
+uses the recording limiter, writes analytics (including sample points), or looks
+up a version. It is a protocol capability check, **not production readiness or
+successful storage proof**. The client shares a three-second timeout across both
+requests, disallows redirects, and rechecks update-request opt-outs after the
+HEAD await before sending. No retries or delayed queue are added. Daily GET and
+opt-in schema-1 feature POST remain single requests and need no handshake.
 
 ## Wire contract
 
@@ -64,8 +89,10 @@ dataset. Neither response echoes input or diagnostics. Accepted requests receive
 the existing version response (or its existing `503 version_unavailable`). A
 version failure can occur after recording; clients must not infer exactly-once
 storage or retry to recover an acknowledgement. The existing per-IP recording
-limiter is unchanged: exhausted callers still receive their version answer,
-without recording. IP is only a transient limiter key, never an analytics column.
+limiter runs exactly once before reading a GET/POST upload: exhausted callers
+receive their version answer without reading or validating the body, even if
+it never finishes, and without recording. Thus invalid/unavailable outcome
+responses above apply only while recording quota is available. IP is only a transient limiter key, never an analytics column.
 
 ## Storage and privacy
 
