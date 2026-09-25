@@ -26,7 +26,7 @@ See [the wire contract, storage columns, retention and private aggregate SQL](do
 The companion client reports outcomes **on by default**, like the existing update
 ping, under update-request policy rather than optional feature-statistics consent.
 `update.checkOnStart: false`, `OPENCLAW_NO_AUTO_UPDATE=1`, and Nix mode suppress
-outcomes; a truthy `CI` suppresses them unless a replacement
+outcomes. A truthy `CI` always suppresses outcomes, including when a replacement
 `OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured. `DO_NOT_TRACK` and
 `openclaw telemetry off` control feature statistics, not update outcomes. Feature
 statistics remain off by default. Deploy and verify this receiver and its separate
@@ -199,8 +199,9 @@ processing is outside those settings.
 | `DO_NOT_TRACK=1` | Same, enforced from the environment. |
 | `update.checkOnStart: false` | Stops automatic update requests and outcome reporting. Explicit update commands and other configured services are separate. |
 
-`OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests. A truthy `CI` suppresses both
-tiers unless a replacement `OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured.
+`OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests. A truthy `CI` suppresses
+daily checks and schema-1 feature reports unless a replacement `OPENCLAW_TELEMETRY_ENDPOINT`
+is explicitly configured. Outcome reports remain suppressed in CI even with a replacement endpoint.
 
 Disabling requests stops future automatic reports; it does not erase previously recorded rows.
 The same three-month Analytics Engine retention applies. This receiver adds no backup or export job.

@@ -7,8 +7,9 @@ provision a production dataset, or authorize production collection. The companio
 client reports outcomes **on by default**, like the existing update ping, governed
 by update-request policy rather than optional schema-1 feature statistics.
 `update.checkOnStart: false`, `OPENCLAW_NO_AUTO_UPDATE=1`, and Nix mode suppress
-outcome reports. A truthy `CI` suppresses them unless a replacement
-`OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured. `DO_NOT_TRACK=1`,
+outcome reports. A truthy `CI` always suppresses them, including when a replacement
+`OPENCLAW_TELEMETRY_ENDPOINT` is explicitly configured. The daily-check custom-endpoint
+exception does not apply to outcomes. `DO_NOT_TRACK=1`,
 `openclaw telemetry off`, and `telemetry.enabled` control feature statistics, not
 default-on update outcomes; feature statistics remain off by default.
 
